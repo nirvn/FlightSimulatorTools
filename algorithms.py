@@ -29,6 +29,7 @@ from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (QgsCoordinateFormatter,
                        QgsCoordinateReferenceSystem,
                        QgsExpression,
+                       QgsFeature,
                        QgsProcessing,
                        QgsFeatureSink,
                        QgsFeatureRequest,
@@ -55,6 +56,8 @@ class FlightPlanMakerProcessingAlgorithm(QgsProcessingAlgorithm):
     NAME_FIELD = 'NAME_FIELD'
     ELEVATION_FIELD = 'ELEVATION_FIELD'
     ORDERBY_EXPRESSION = 'ORDERBY_EXPRESSION'
+    DEPARTURE_AIRPORT = 'DEPARTURE_AIRPORT'
+    DESTINATION_AIRPORT = 'DESTINATION_AIRPORT'
     OUTPUT = 'OUTPUT'
 
     def tr(self, string):
@@ -79,26 +82,35 @@ class FlightPlanMakerProcessingAlgorithm(QgsProcessingAlgorithm):
         return 'flightsimulator2020'
 
     def shortHelpString(self):
-        return self.tr("Make a flight plan for Flight Simulator 2020.")
+        return self.tr("Build a flight plan for Flight Simulator 2020 using a point layer as intermediary waypoints.\n\nDeparture and destination airports will be automatically selected by locating the nearest airports to the first and last waypoint. Alternatively, custom departure and/or destination airports can be specified by entering ICAO IDs.")
 
     def initAlgorithm(self, config=None):
-        self.addParameter(QgsProcessingParameterString(self.TITLE,'Flight plan description','QGIS flight plan'))
+        self.addParameter(QgsProcessingParameterString(self.TITLE,
+                                                       self.tr('Flight plan description'), 'QGIS flight plan' ))
 
         self.addParameter(QgsProcessingParameterFeatureSource(self.INPUT,
-                                                              self.tr('Flight points layer'),
+                                                              self.tr('Flight waypoints layer'),
                                                               [QgsProcessing.TypeVectorPoint]))        
         self.addParameter(QgsProcessingParameterField(self.NAME_FIELD,
-                                                      self.tr('Points name field'), parentLayerParameterName=self.INPUT, type=QgsProcessingParameterField.String, optional=True))
+                                                      self.tr('Waypoints name field'), parentLayerParameterName=self.INPUT, type=QgsProcessingParameterField.String, optional=True))
         
         elevation_param = QgsProcessingParameterField(self.ELEVATION_FIELD,
-                                                      self.tr('Points elevation field'), parentLayerParameterName=self.INPUT, type=QgsProcessingParameterField.Numeric, optional=True)
+                                                      self.tr('Waypoints elevation field'), parentLayerParameterName=self.INPUT, type=QgsProcessingParameterField.Numeric, optional=True)
         elevation_param.setFlags(elevation_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(elevation_param)
-        
+        self.addParameter(elevation_param)        
         orderby_param = QgsProcessingParameterExpression(self.ORDERBY_EXPRESSION,
-                                                      self.tr('Points order by expression'), parentLayerParameterName=self.INPUT, optional=True)
+                                                         self.tr('Waypoints ordering by expression'), parentLayerParameterName=self.INPUT, optional=True)
         orderby_param.setFlags(orderby_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(orderby_param)
+
+        departure_airport_param = QgsProcessingParameterString(self.DEPARTURE_AIRPORT,
+                                                               self.tr('Custom departure airport ICAO ID'), '', optional=True)
+        departure_airport_param.setFlags(departure_airport_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(departure_airport_param)
+        destination_airport_param = QgsProcessingParameterString(self.DESTINATION_AIRPORT,
+                                                               self.tr('Custom destination airport ICAO ID'), '', optional=True)
+        destination_airport_param.setFlags(destination_airport_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(destination_airport_param)
 
         self.addParameter(QgsProcessingParameterFileDestination(self.OUTPUT,
                                                                 self.tr('Output .pln file')))
@@ -155,11 +167,30 @@ class FlightPlanMakerProcessingAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException('Error: destination point is missing')
 
         strips = QgsVectorLayer(os.path.join(os.path.dirname(__file__),'data','strips.gpkg'),'strips')
+        index = QgsSpatialIndex(strips.getFeatures())
 
         icao_index = strips.fields().lookupField('icao')
         name_short_index = strips.fields().lookupField('nameshort')
 
-        index = QgsSpatialIndex(strips.getFeatures())
+        departure_airport = self.parameterAsString(parameters, self.DEPARTURE_AIRPORT, context)
+        if departure_airport:
+            feature = QgsFeature()
+            expression = QgsExpression("icao ILIKE '{}'".format(departure_airport))
+            strips.getFeatures(QgsFeatureRequest(expression)).nextFeature(feature)
+            if feature:
+                departure_point = feature.geometry().asPoint()
+            else:
+                raise QgsProcessingException('Error: custom departure airport ICAO ID not found')
+
+        destination_airport = self.parameterAsString(parameters, self.DESTINATION_AIRPORT, context)
+        if destination_airport:
+            feature = QgsFeature()
+            expression = QgsExpression("icao ILIKE '{}'".format(destination_airport))
+            strips.getFeatures(QgsFeatureRequest(expression)).nextFeature(feature)
+            if feature:
+                destination_point = feature.geometry().asPoint()
+            else:
+                raise QgsProcessingException('Error: custom destination airport ICAO ID not found')
 
         departure = ''
         departure_header = ''
@@ -181,7 +212,7 @@ class FlightPlanMakerProcessingAlgorithm(QgsProcessingAlgorithm):
             destination = '        <ATCWaypoint id="{}">\n            <ATCWaypointType>Airport</ATCWaypointType>\n            <WorldPosition>{}</WorldPosition>\n            <RunwayNumberFP>1</RunwayNumberFP>\n            <ICAO>\n                <ICAOIdent>{}</ICAOIdent>\n            </ICAO>\n        </ATCWaypoint>\n'.format(feature[icao_index], self.formattedCoordinateElevation(point, elevation), feature[icao_index])
             destination_header = '        <DestinationID>{}</DestinationID>\n        <DestinationLLA>{}</DestinationLLA>\n        <DestinationName>{}</DestinationName>\n'.format(feature[icao_index], self.formattedCoordinateElevation(point, elevation), feature[name_short_index])
         
-        title = plan_file_path = self.parameterAsString(parameters,self.TITLE,context)
+        title = self.parameterAsString(parameters, self.TITLE, context)
 
         plan_file_path = self.parameterAsString(parameters,self.OUTPUT,context)
         plan_file = open(plan_file_path,'w')

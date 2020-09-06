@@ -113,7 +113,7 @@ class FlightPlanMakerProcessingAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(destination_airport_param)
 
         self.addParameter(QgsProcessingParameterFileDestination(self.OUTPUT,
-                                                                self.tr('Output .pln file')))
+                                                                self.tr('Output flight plan file (.PLN)'), fileFilter='Flight plan files (*.PLN *.pln)'))
 
     def processAlgorithm(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.INPUT, context)

@@ -24,6 +24,7 @@ Flight Simulator Tools QGIS Processing algorithms
 """
 
 import os
+import re
 
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (QgsCoordinateFormatter,
@@ -154,6 +155,7 @@ class FlightPlanMakerProcessingAlgorithm(QgsProcessingAlgorithm):
             name = 'UNTITLED'
             if name_field_index >= 0:
                 name = feature[name_field_index]
+                name = re.sub('[^0-9A-Za-z_]', '', re.sub('\s+','_', name))
 
             elevation = 1000.0
             if elevation_field_index >= 0:
